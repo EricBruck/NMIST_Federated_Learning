@@ -1,0 +1,17 @@
+# Ignore virtual environments
+venv/
+ENV/
+env/
+
+# Ignore datasets
+data/
+*.pt
+*.npy
+
+# Ignore python cache
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Ignore hidden system files
+.DS_Store
