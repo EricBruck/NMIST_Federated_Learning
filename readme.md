@@ -8,7 +8,7 @@ logistic regression model and MNIST loaded through PyTorch.
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/<your-username>/NMIST_Federated_Learning.git
+git clone https://github.com/EricBruck/NMIST_Federated_Learning
 cd NMIST_Federated_Learning
 
 # 2. Create a virtual environment
