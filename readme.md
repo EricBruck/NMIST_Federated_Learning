@@ -26,4 +26,8 @@ source venv/bin/activate
 pip install -r requirements.txt
 
 # 5. Run the Federated Learning project
-python main.py
+FedAvg:
+python main_FedaAvg.py
+
+FedVI:
+python main_FedVI.py
