@@ -1,5 +1,5 @@
 from utils import load_mnist, create_IID_clients, non_iid_split, plot_loss, compute_accuracy
-from fedvi import fedVI
+from FedVI import fedVI
 import numpy as np
 
 # Load data
@@ -15,16 +15,22 @@ global_blocks = [
     for _ in range(num_clients)
 ]
 
+R = 30
 # Eta schedule
-eta_schedule = [0.0] * 10
+eta_schedule = np.linspace(0.0, 0.3, R)
 
 # Run FedVI
 losses, accs, final_blocks = fedVI(
-    clients, global_blocks,
-    R=10, H=1,
-    gamma_l=0.05, lambda_m=0.01,
+    clients, 
+    global_blocks,
+    R=R,
+    H=5,
+    gamma_l=0.2, 
+    lambda_m=0.01,
+    batch_size=64,
     eta_schedule=eta_schedule,
-    X_test=X_test, y_test=y_test
+    X_test=X_test, 
+    y_test=y_test
 )
 
 # Convert blocks → global model

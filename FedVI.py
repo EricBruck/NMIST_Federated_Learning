@@ -96,9 +96,14 @@ def fedVI(client_datasets, global_blocks, R, H, gamma_l, lambda_m,
             S_r = np.random.choice(num_clients, size=m, replace=False)
 
         blocks_snapshot = [b.copy() for b in global_blocks]
-        eta_r = eta_schedule[r] if eta_schedule else 0.0
 
         updated = {}
+
+        if eta_schedule is not None:
+            eta_r = eta_schedule[r]
+        else:
+            eta_r = 0.0
+
 
         # ---- Local FedVI updates ----
         for m in S_r:
@@ -133,7 +138,7 @@ def fedVI(client_datasets, global_blocks, R, H, gamma_l, lambda_m,
         if X_test is not None and y_test is not None:
             test_loss = cross_entropy_loss(X_test, y_test, w_global)
             test_acc  = compute_accuracy(X_test, y_test, w_global)
-            test_acc.append(test_acc)
+            accs.append(test_acc)
             test_info = f", Test Loss={test_loss:.4f}, Test Acc={test_acc*100:.2f}%"
 
         # ---- print identical formatting ----

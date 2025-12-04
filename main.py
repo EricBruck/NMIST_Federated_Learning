@@ -353,30 +353,9 @@ if __name__ == "__main__":
     # load data once
     X_train, y_train, X_test, y_test = load_mnist()
 
-    # ===================== FedAvg ============================
     num_clients = 3
     client_splits = non_iid_split(X_train, y_train, num_clients)
-    client_datasets_fedavg = [
-        pd.DataFrame(np.column_stack((X, y))) for X, y in client_splits
-    ]
 
-    np.random.seed(42)
-    W_init = np.random.randn(X_train.shape[1], 10) * 0.01
-
-    R_fedavg = 5
-    losses_fedavg, W_final = federated_averaging(
-        client_datasets_fedavg,
-        W_init,
-        R=R_fedavg,
-        H=1,
-        gamma=0.1,
-        batch_size=32,
-        X_test=X_test,
-        y_test=y_test,
-    )
-
-    print(f"[FedAvg] Final Test Accuracy: {compute_accuracy(X_test, y_test, W_final)*100:.2f}%")
-    plot_loss(losses_fedavg, title="FedAvg Global Loss")
 
     # ===================== FedVI =============================
     # re-use the same data splits but as (X, y) tuples
@@ -385,18 +364,18 @@ if __name__ == "__main__":
     np.random.seed(42)
     global_blocks_init = [np.random.randn(X_train.shape[1], 10) * 0.01 for _ in range(num_clients)]
 
-    R_fedvi = 10
-    eta_schedule = [0.0 for _ in range(R_fedvi)] 
+    R_fedvi = 20
+    eta_schedule = [0.1 for _ in range(R_fedvi)] 
 
     losses_fedvi, accs_fedvi, global_blocks_final = fedVI(
         client_datasets=client_datasets_fedvi,
         global_blocks=[b.copy() for b in global_blocks_init],
         R=R_fedvi,
-        H=1,
+        H=20,
         gamma_l=0.05,
         lambda_m=0.01,
-        batch_size=32,
-        client_fraction=1.0,
+        batch_size=64,
+        client_fraction=0.40,
         eta_schedule=eta_schedule,
         X_test=X_test,
         y_test=y_test,
@@ -408,3 +387,5 @@ if __name__ == "__main__":
     print(f"[FedVI] Final Test Accuracy: {final_acc*100:.2f}%")
 
     plot_loss(losses_fedvi, title="FedVI Global Loss")
+
+
