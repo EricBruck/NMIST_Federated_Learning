@@ -1,44 +1,48 @@
-from utils import load_mnist, create_IID_clients, non_iid_split, plot_loss, compute_accuracy
-from FedVI import fedVI
 import numpy as np
+from utils import load_mnist, non_iid_split, plot_loss, compute_accuracy
+from FedVI import pcfedavg_blockwise
 
 # Load data
 X_train, y_train, X_test, y_test = load_mnist()
 
-# Create IID clients
-num_clients = 3
-clients = non_iid_split(X_train, y_train, num_clients)
+# Clients
+num_clients = 10
+clients = non_iid_split(X_train, y_train, num_clients, alpha=0.5)
 
-# Initialize FedVI blocks
-global_blocks = [
-    np.random.randn(X_train.shape[1], 10) * 0.01
-    for _ in range(num_clients)
-]
+# Initialize per-client blocks (each client has its own model W_i)
+d = X_train.shape[1]
+C = 10
+W_blocks = [np.random.randn(d, C) * 0.01 for _ in range(num_clients)]
 
-R = 30
-# Eta schedule
-eta_schedule = np.linspace(0.0, 0.3, R)
+R = 50
+K = 3
+gamma_l = 0.005
+batch_size = 64
 
-# Run FedVI
-losses, accs, final_blocks = fedVI(
-    clients, 
-    global_blocks,
+# eta schedule (paper uses eta_r multiplying the stochastic gradient term)
+eta_schedule = np.linspace(1.0, 1.0, R)  # start constant; tune later
+
+# rho thresholds (constraint): larger => weaker constraint
+rho_list = [3.0 for _ in range(num_clients)]
+
+losses, accs, final_blocks = pcfedavg_blockwise(
+    client_datasets=clients,
+    W_blocks=W_blocks,
     R=R,
-    H=5,
-    gamma_l=0.2, 
-    lambda_m=0.01,
-    batch_size=64,
+    K=K,
+    gamma_l=gamma_l,
+    batch_size=batch_size,
+    client_fraction=1.0,
     eta_schedule=eta_schedule,
-    X_test=X_test, 
-    y_test=y_test
+    rho_list=rho_list,
+    X_test=X_test,
+    y_test=y_test,
+    display_every=1,
 )
 
-# Convert blocks → global model
-w_final = sum(final_blocks) / len(final_blocks)
+# Report final global model (mean of blocks)
+W_final = sum(final_blocks) / len(final_blocks)
+acc = compute_accuracy(X_test, y_test, W_final)
+print(f"[PCFedAvg-Blockwise] Final Accuracy = {acc*100:.2f}%")
 
-# Evaluate
-acc = compute_accuracy(X_test, y_test, w_final)
-print(f"[FedVI] Final Accuracy = {acc*100:.2f}%")
-
-# Plot
-plot_loss(losses, "FedVI Loss Curve")
+plot_loss(losses, "PCFedAvg-Blockwise Loss Curve")

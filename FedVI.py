@@ -1,149 +1,182 @@
-"""
-fedvi.py
---------
-Implements the simplified FedVI algorithm:
-- Local FedVI-style update
-- Global block update rule
-- Consensus regularization + variance scaling
-"""
-
 import numpy as np
 from sklearn.utils import shuffle
 from utils import compute_gradient, cross_entropy_loss, compute_accuracy
 
 
-# ============================================================
-# CLIENT UPDATE (FedVI)
-# ============================================================
-
-def fedVI_client_update(w_init, X, y, global_blocks, eta_r=0.0,
-                        gamma_l=0.01, lambda_m=0.1, H=1, batch_size=32):
+def h_i_smooth_dist(W_i: np.ndarray, W_bar: np.ndarray, eps: float = 1e-3) -> float:
     """
-    Performs FedVI local update on a single client.
-
-    FedVI modification:
-    - gradient scaled by (1 + eta_r)
-    - regularization pulling model toward consensus block
-
-    Parameters
-    ----------
-    global_blocks : list of weight matrices (1 per client)
-    lambda_m : float
-        Regularization strength toward block consensus.
-
-    Returns
-    -------
-    w : np.ndarray
-        Updated block for this client.
+    h_i(x_i) = sqrt(||x_i - xbar||^2 + eps^2)
+    Convex in x_i, C^1.
     """
-    w = w_init.copy()
-    n = len(X)
+    D = W_i - W_bar
+    return float(np.sqrt(np.sum(D * D) + eps * eps))
 
-    block_avg = sum(global_blocks) / len(global_blocks)
+def grad_h_i_smooth_dist(W_i: np.ndarray, W_bar: np.ndarray, eps: float = 1e-3) -> np.ndarray:
+    """
+    ∇_{x_i} h_i(x_i) = (x_i - xbar) / sqrt(||x_i-xbar||^2 + eps^2)
+    """
+    D = W_i - W_bar
+    denom = np.sqrt(np.sum(D * D) + eps * eps)
+    return D / denom
 
-    for _ in range(H):
-        X, y = shuffle(X, y)
+def grad_g_i(W_i: np.ndarray, W_bar: np.ndarray, rho_i: float, eps: float = 1e-3) -> np.ndarray:
+    """
+    g_i(x_i) = 1/2 * max(0, h_i(x_i) - rho_i)^2
+    ∇g_i = ∇h_i(x_i) * max(0, h_i(x_i) - rho_i)
+    """
+    hval = h_i_smooth_dist(W_i, W_bar, eps=eps)
+    hinge = max(0.0, hval - rho_i)
+    return grad_h_i_smooth_dist(W_i, W_bar, eps=eps) * hinge
 
-        for i in range(0, n, batch_size):
-            X_b = X[i:i+batch_size]
-            y_b = y[i:i+batch_size]
-            if len(X_b) == 0:
+
+def client_update_pcfedavg(
+    W_i_init: np.ndarray,
+    X_i: np.ndarray,
+    y_i: np.ndarray,
+    W_bar_snapshot: np.ndarray,
+    rho_i: float,
+    eta_r: float,
+    gamma_l: float,
+    K: int,
+    batch_size: int,
+):
+    """
+    Implements the screenshot update direction:
+      g_{i,t}^{r,eta} = ∇g_i(W_{i,t}) + eta_r * ∇ \tilde f_i(W_bar, xi_batch)
+      W_{i,t+1} = W_{i,t} - gamma_l * g_{i,t}^{r,eta}
+    Note: stochastic gradient is evaluated at W_bar_snapshot (global ref),
+          constraint gradient at local W_{i,t}.
+    """
+    W = W_i_init.copy()
+    n = len(X_i)
+    if n == 0:
+        return W
+
+    for _ in range(K):
+        X_i, y_i = shuffle(X_i, y_i)
+        for s in range(0, n, batch_size):
+            Xb = X_i[s:s+batch_size]
+            yb = y_i[s:s+batch_size]
+            if len(Xb) == 0:
                 continue
 
-            grad = compute_gradient(X_b, y_b, w)
-            grad = (1 + eta_r) * grad                      # variance scaling
-            reg  = lambda_m * (w - block_avg)             # FedVI consensus penalty
-
-            w -= gamma_l * (grad + reg)
-
-    return w
+            # constraint term at local variable
+            grad_g = grad_g_i(W, W_bar_snapshot, rho_i, eps=1e-3)
 
 
-# ============================================================
-# FEDVI TRAINING LOOP
-# ============================================================
+            # stochastic gradient evaluated at global reference
+            grad_f = compute_gradient(Xb, yb, W_bar_snapshot)
 
-def fedVI(client_datasets, global_blocks, R, H, gamma_l, lambda_m,
-          batch_size=32, client_fraction=1.0, eta_schedule=None,
-          X_test=None, y_test=None, display_every=1):
+            g = grad_g + eta_r * grad_f
+
+            # gradient clipping (L2)
+            g_norm = np.linalg.norm(g)
+            clip = 5.0
+            if g_norm > clip:
+               g = g * (clip / (g_norm + 1e-12))
+
+            W -= gamma_l * g
+
+    return W
+
+def pcfedavg_blockwise(
+    client_datasets,
+    W_blocks,                 # list of per-client models W_i (these are the "blocks" x^i)
+    R: int,
+    K: int,
+    gamma_l: float,
+    batch_size: int = 64,
+    client_fraction: float = 1.0,
+    eta_schedule=None,
+    rho_list=None,
+    X_test=None,
+    y_test=None,
+    display_every: int = 1,
+):
     """
-    FedVI global training loop.
-
-    Parameters
-    ----------
-    global_blocks : list of local models (one per client)
-    eta_schedule : list of eta values per round
-
-    Returns
-    -------
-    losses : np.ndarray
-    accs : np.ndarray
-    global_blocks : final block set
+    "Blockwise" here follows the paper's variable stacking x=(x_i):
+      - each client i owns block x_i (=W_i)
+      - global reference W_bar is the average of blocks
+      - clients update their own block only
+      - server keeps W_j unchanged if j not in S_r
+      - when j in S_r, update W_j with weighted averaging (trivial here since only client j updates block j)
     """
-    num_clients = len(client_datasets)
-    n_k = np.array([len(X) for X, _ in client_datasets])
-    n_total = np.sum(n_k)
+    m = len(client_datasets)
+    if rho_list is None:
+        # default constraint thresholds: allow moderate norm
+        rho_list = [25.0 for _ in range(m)]
+    if len(rho_list) != m:
+        raise ValueError("rho_list must have length = num_clients")
+
+    n_k = np.array([len(X) for X, _ in client_datasets], dtype=float)
+    n_total = np.sum(n_k) if np.sum(n_k) > 0 else 1.0
 
     losses, accs = [], []
 
     for r in range(R):
-
-        # ---- Choose participating clients ----
-        if client_fraction == 1.0:
-            S_r = np.arange(num_clients)
+        # sample clients
+        if client_fraction >= 1.0:
+            S_r = np.arange(m)
         else:
-            m = max(1, int(num_clients * client_fraction))
-            S_r = np.random.choice(num_clients, size=m, replace=False)
+            s = max(1, int(m * client_fraction))
+            S_r = np.random.choice(m, size=s, replace=False)
 
-        blocks_snapshot = [b.copy() for b in global_blocks]
+        eta_r = eta_schedule[r] if eta_schedule is not None else 1.0
+
+        # server snapshot
+        W_snapshot = [W.copy() for W in W_blocks]
+        W_bar = sum(W_snapshot) / m  # \bar{x}_t
 
         updated = {}
 
-        if eta_schedule is not None:
-            eta_r = eta_schedule[r]
-        else:
-            eta_r = 0.0
-
-
-        # ---- Local FedVI updates ----
-        for m in S_r:
-            X_m, y_m = client_datasets[m]
-            updated[m] = fedVI_client_update(
-                w_init=blocks_snapshot[m],
-                X=X_m, y=y_m,
-                global_blocks=blocks_snapshot,
+        # local updates (each client updates its own block)
+        for i in S_r:
+            X_i, y_i = client_datasets[i]
+            updated[i] = client_update_pcfedavg(
+                W_i_init=W_snapshot[i],
+                X_i=X_i,
+                y_i=y_i,
+                W_bar_snapshot=W_bar,
+                rho_i=rho_list[i],
                 eta_r=eta_r,
                 gamma_l=gamma_l,
-                lambda_m=lambda_m,
-                H=H,
+                K=K,
                 batch_size=batch_size,
             )
 
-        # ---- Update active blocks ----
-        for m in S_r:
-            global_blocks[m] = updated[m]
+        # server update: keep old if not selected; update only selected blocks
+        m_r = np.sum(n_k[S_r]) if len(S_r) > 0 else 1.0
 
-        # ---- Build global model by averaging blocks ----
-        w_global = sum(global_blocks) / len(global_blocks)
+        for j in range(m):
+            if j in S_r:
+                # weighted average (degenerates to just updated[j] if each block has one contributor)
+                W_blocks[j] = (n_k[j] / m_r) * updated[j]
+                # If, later, multiple clients can contribute to block j, you'd sum them here.
+                # For the client-owned-block schedule, only client j contributes to block j.
+                W_blocks[j] /= (n_k[j] / m_r)  # cancels now; keep structure explicit
+            else:
+                W_blocks[j] = W_snapshot[j]
 
-        # ---- Global loss ----
-        total_loss = 0
-        for k in range(num_clients):
-            X_k, y_k = client_datasets[k]
-            total_loss += (n_k[k] / n_total) * cross_entropy_loss(X_k, y_k, w_global)
+        # evaluation: use global average model (typical reporting)
+        W_bar_new = sum(W_blocks) / m
+
+        # weighted train loss (across all client data)
+        total_loss = 0.0
+        for i in range(m):
+            X_i, y_i = client_datasets[i]
+            if len(X_i) == 0:
+                continue
+            total_loss += (n_k[i] / n_total) * cross_entropy_loss(X_i, y_i, W_bar_new)
         losses.append(total_loss)
 
-        # ---- test accuracy & loss ----
         test_info = ""
         if X_test is not None and y_test is not None:
-            test_loss = cross_entropy_loss(X_test, y_test, w_global)
-            test_acc  = compute_accuracy(X_test, y_test, w_global)
+            test_loss = cross_entropy_loss(X_test, y_test, W_bar_new)
+            test_acc  = compute_accuracy(X_test, y_test, W_bar_new)
             accs.append(test_acc)
             test_info = f", Test Loss={test_loss:.4f}, Test Acc={test_acc*100:.2f}%"
 
-        # ---- print identical formatting ----
         if r % display_every == 0:
-            print(f"[FedVI] Round {r:3d}: Global Loss={total_loss:.4f}{test_info}")
+            print(f"[PCFedAvg-Blockwise] Round {r:3d}: Global Loss={total_loss:.4f}{test_info}")
 
-
-    return np.array(losses), np.array(accs), global_blocks
+    return np.array(losses), np.array(accs), W_blocks
