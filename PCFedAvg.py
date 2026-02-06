@@ -121,6 +121,14 @@ def grad_g_i(W: np.ndarray, X: np.ndarray, y: np.ndarray, gamma_reg: float, eps_
     # Case 3: Constraint significantly violated - apply full gradient penalty
     return grad_h
 
+def g_value(h, lam):
+    # g_{i,λ}(x) piecewise scalar
+    if h < 0:
+        return 0.0
+    if h < lam:
+        return (h * h) / (2.0 * lam)
+    return h - lam / 2.0
+
 
 def estimate_epsilons(client_datasets, W_init, warmup_epochs=1, lr=0.01, batch_size=64):
     """
@@ -193,7 +201,7 @@ def pcfedavg_blockwise_efficient(
     R: int,                   # Total number of communication rounds
     K: int,                   # Number of local SGD steps per client per round
     gamma_l: float,           # Client-side learning rate (γ_l)
-    rho: float,               # Penalty weight for constraint enforcement (ρ)
+    rho_base: float,          # Penalty weight for constraint enforcement (ρ)
     lam: float,               # Smoothing parameter (λ) for penalty function
     gamma_reg: float,         # L2 regularization coefficient (γ)
     eps_list,                 # constraint parameters [eps_0, ..., eps_m-1]
@@ -214,7 +222,7 @@ def pcfedavg_blockwise_efficient(
        - The global model is the average: W_bar = (1/m) * Σ x_i
        - Each client trains locally using their own block
     
-    2. LOCAL UPDATES (K steps per round):
+    2. LOCAL UPDATES (K epochs per round):
        - Each client computes gradients using the averaged model z = (1/m) * Σ x_j
        - For each block j, gradient is d_{i,t}^j = (1/m) * ∇f(z)
        - Augments data gradient with penalty: v_i = d_{i,t} + ρ * ∇g_i(x_i)
@@ -244,7 +252,7 @@ def pcfedavg_blockwise_efficient(
         R: Number of communication rounds
         K: Number of local SGD epochs per round
         gamma_l: Learning rate for local and server updates
-        rho: Weighting factor for constraint penalty (typically ~0.1-1.0)
+        rho_base: Weighting factor for constraint penalty (typically ~0.1-1.0)
         lam: Smoothing threshold for penalty function (typically ~0.1-1.0)
         gamma_reg: L2 regularization strength (typically ~0.001-0.1)
         eps_list: Constraint thresholds / loss budgets (feasibility epsilons) (output of estimate_epsilons).
@@ -275,8 +283,15 @@ def pcfedavg_blockwise_efficient(
     # Lists to track metrics over rounds
     losses, accs = [], []
 
+    h_hist = np.zeros((R, m), dtype=float)
+    g_hist = np.zeros((R, m), dtype=float)
+
     # === MAIN FEDERATED LEARNING LOOP ===
     for r in range(R):
+
+        # Round-dependent penalty weight (rho)
+        rho_r = rho_base * (r + 10000) ** 0.25
+        
         # --- CLIENT SAMPLING ---
         # Sample a subset of clients (potentially fewer than m) to participate in this round
         if client_fraction >= 1.0:
@@ -293,6 +308,7 @@ def pcfedavg_blockwise_efficient(
         sum_all = np.zeros_like(W_snapshot[0])
         for j in range(m):
             sum_all += W_snapshot[j]
+
 
         # --- CLIENT-LOCAL COMPUTATION ---
         # Storage for results from each participating client
@@ -353,7 +369,7 @@ def pcfedavg_blockwise_efficient(
                     pen = grad_g_i(W_i, Xb, yb, gamma_reg=gamma_reg, eps_i=eps_list[i], lam=lam)
                     
                     # Combined update direction: data gradient + rho * penalty
-                    v_i = d_block + rho * pen
+                    v_i = d_block + rho_r * pen
 
                     # --- GRADIENT CLIPPING ---
                     # Clip gradient norm to stabilize training and control update magnitudes
@@ -411,12 +427,24 @@ def pcfedavg_blockwise_efficient(
 
             # Apply correction: subtract (γ_l/m) * Σ_{k≠j} D_{k}^j from owner's update
             # This prevents unselected clients' gradient pushes from dominating
-            new_blocks[j] = x_owner - (gamma_l / m) * correction_grad_sum
+            new_blocks[j] = x_owner - gamma_l * correction_grad_sum
 
         # Replace server blocks with newly aggregated blocks
         W_blocks = new_blocks
 
         # --- EVALUATION PHASE ---
+
+        for i in range(m):
+            X_i, y_i = client_datasets[i]
+            if len(X_i) == 0:
+                h_hist[r, i] = np.nan
+                g_hist[r, i] = np.nan
+                continue
+
+            h = h_i_loss(W_blocks[i], X_i, y_i, gamma_reg=gamma_reg, eps_i=eps_list[i])
+            h_hist[r, i] = h
+            g_hist[r, i] = g_value(h, lam=lam)
+        
         # Compute global averaged model for evaluation
         # This is what would be deployed in practice
         W_bar = sum(W_blocks) / m
@@ -445,4 +473,4 @@ def pcfedavg_blockwise_efficient(
 
     # === RETURN RESULTS ===
     # Return training history and final model
-    return np.array(losses), np.array(accs), W_blocks
+    return np.array(losses), np.array(accs), W_blocks, h_hist, g_hist

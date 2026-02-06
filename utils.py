@@ -140,3 +140,34 @@ def plot_loss(losses, title="Loss Curve"):
     plt.title(title)
     plt.grid(True)
     plt.show()
+
+def plot_curve(values, title, ylabel, xlabel="Round"):
+    """
+    Plots a single curve vs round (same style as plot_loss).
+    """
+    plt.plot(values)
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    plt.title(title)
+    plt.grid(True)
+    plt.show()
+
+
+def plot_clients_curves(values_rm, title, ylabel, xlabel="Round", max_clients=10, show_legend=True):
+    """
+    Plots up to max_clients client curves. values_rm is shape (R, m).
+    Keeps formatting simple like plot_loss.
+    """
+    values_rm = np.asarray(values_rm)
+    R, m = values_rm.shape
+
+    for i in range(min(m, max_clients)):
+        plt.plot(values_rm[:, i], label=f"client {i}")
+
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    plt.title(title)
+    plt.grid(True)
+    if show_legend and m <= max_clients:
+        plt.legend(loc="best", fontsize="small", frameon=True, ncol=2 if m > 5 else 1)
+    plt.show()
