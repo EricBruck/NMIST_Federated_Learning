@@ -129,8 +129,11 @@ def g_value(h, lam):
         return (h * h) / (2.0 * lam)
     return h - lam / 2.0
 
+def grad_norm(mat: np.ndarray) -> float:
+    return float(np.linalg.norm(mat))
 
-def estimate_epsilons(client_datasets, W_init, warmup_epochs=1, lr=0.01, batch_size=64):
+
+def estimate_epsilons(client_datasets, W_init, multiplier = 1.1, warmup_epochs=1, lr=0.01, batch_size=64):
     """
     Initialize constraint thresholds (feasibility epsilons / loss budgets) for each client.
     
@@ -190,7 +193,7 @@ def estimate_epsilons(client_datasets, W_init, warmup_epochs=1, lr=0.01, batch_s
                 best = min(best, L)
 
         # Set epsilon to 1.1x the minimum loss to allow some slack
-        eps_list.append(1.1 * best)
+        eps_list.append(multiplier * best)
 
     return eps_list
 
@@ -283,8 +286,25 @@ def pcfedavg_blockwise_efficient(
     # Lists to track metrics over rounds
     losses, accs = [], []
 
+    metric_hist = np.zeros(R, dtype=float)   # || avg grad || + rho * avg g(h)
+    gradnorm_hist = np.zeros(R, dtype=float) # || avg grad ||
+    gmean_hist = np.zeros(R, dtype=float)    # avg g(h)
+
+
     h_hist = np.zeros((R, m), dtype=float)
     g_hist = np.zeros((R, m), dtype=float)
+
+
+
+    W_bar_init = sum(W_blocks) / m
+    init_loss = 0.0
+    for i in range(m):
+        X_i, y_i = client_datasets[i]
+        if len(X_i) == 0: 
+            continue
+        init_loss += (n_k[i] / n_total) * cross_entropy_loss(X_i, y_i, W_bar_init)
+    print(f"[Before training] Global Loss={init_loss:.4f}")
+
 
     # === MAIN FEDERATED LEARNING LOOP ===
     for r in range(R):
@@ -389,48 +409,37 @@ def pcfedavg_blockwise_efficient(
             updated_block[i] = W_i
             D_sum[i] = D_acc
 
-        # --- SERVER UPDATE PHASE ---
-        # Server aggregates updates from participating clients and applies corrections
-        # 
-        # Update rule for each block j:
-        #   x̄_{r+1}^j = x_{j,T_{r+1}}^j - (γ_l / m) * Σ_{k≠j} D_{k,r}^j
+        # --- SERVER UPDATE PHASE (MODIFIED ALGO) ---
+        # Modified update:
+        #   x̄_{r+1}^j = (1/m) * ( x_{j,T_{r+1}}^j + Σ_{i≠j} ( x_T^j - γ_l D_{i,r}^j ) )
         #
-        # Where:
-        # - x_{j,T_{r+1}}^j: Client j's locally updated block (if j was selected, else snapshot)
-        # - D_{k,r}^j: Gradient accumulated by client k affecting OTHER blocks
-        #              Since all blocks see the same gradient, D_{k,r}^j = D_sum[k]
-        # - Correction term: -(γ_l/m) * Σ_{k≠j} D_{k,r}^j
-        #                   This counterbalances gradients from clients not updating block j
+        # With our optimized storage:
+        #   D_{i,r}^j = D_sum[i]   for any j ≠ i
         #
-        # Intuition: If block j is owned by client i but we sample other clients,
-        #           those clients will push the averaged model z. We correct for this
-        #           so block j still reflects client i's contribution properly.
-        
+        # So:
+        #   x̄_{r+1}^j = (1/m) * ( x_owner + (m-1)*x_snap_j - γ_l * Σ_{i≠j} D_sum[i] )
+
         new_blocks = [W_snapshot[j].copy() for j in range(m)]
 
-        # Precompute total gradient accumulation from all participating clients
-        # This is used in the correction term for each block
+        # Sum of all D_sum over the clients that actually sent D (typically all clients if client_fraction=1)
         total_D = np.zeros_like(W_snapshot[0])
-        for k in S_r:
-            total_D += D_sum[k]
+        for i in D_sum:  # keys are the participating clients
+            total_D += D_sum[i]
 
-        # Update each block j
         for j in range(m):
-            # Get the updated block from client j (if they participated)
-            # Otherwise use server's snapshot as-is
-            x_owner = updated_block[j] if j in updated_block else W_snapshot[j]
+            x_snap_j = W_snapshot[j]
 
-            # Compute correction gradient sum for block j
-            # This is the sum of gradients from ALL other clients (all k ≠ j in S_r)
-            # Computed as: (sum of all k in S_r) - (k=j if j in S_r)
-            correction_grad_sum = total_D - (D_sum[j] if j in D_sum else 0.0)
+            # Owner's updated block if owner participated; otherwise snapshot
+            x_owner = updated_block[j] if j in updated_block else x_snap_j
 
-            # Apply correction: subtract (γ_l/m) * Σ_{k≠j} D_{k}^j from owner's update
-            # This prevents unselected clients' gradient pushes from dominating
-            new_blocks[j] = x_owner - gamma_l * correction_grad_sum
+            # Σ_{i≠j} D_sum[i]
+            sum_D_excl_j = total_D - (D_sum[j] if j in D_sum else 0.0)
 
-        # Replace server blocks with newly aggregated blocks
+            # Apply modified averaging update
+            new_blocks[j] = (x_owner + (m - 1) * x_snap_j - gamma_l * sum_D_excl_j) / m
+
         W_blocks = new_blocks
+
 
         # --- EVALUATION PHASE ---
 
@@ -448,6 +457,28 @@ def pcfedavg_blockwise_efficient(
         # Compute global averaged model for evaluation
         # This is what would be deployed in practice
         W_bar = sum(W_blocks) / m
+
+        # ---- compute avg gradient norm at W_bar ----
+        grad_sum = np.zeros_like(W_bar)
+        for i in range(m):
+            X_i, y_i = client_datasets[i]
+            if len(X_i) == 0:
+                continue
+
+            # full local gradient of f_i at the current global averaged model
+            grad_sum += compute_gradient(X_i, y_i, W_bar)
+
+        avg_grad = grad_sum / m
+        avg_grad_norm = float(np.linalg.norm(avg_grad))
+
+        # ---- compute average scalar infeasibility g_{i,λ}(h_i) ----
+        g_mean = float(np.nanmean(g_hist[r, :]))  # you already filled g_hist[r,i] above
+
+        # ---- combined metric (what you asked for, using g instead of grad_g) ----
+        gradnorm_hist[r] = avg_grad_norm
+        gmean_hist[r] = g_mean
+        metric_hist[r] = avg_grad_norm + rho_r * g_mean
+
 
         # Compute weighted training loss across all clients
         # Weighting by data size ensures larger clients contribute more to loss
@@ -468,9 +499,9 @@ def pcfedavg_blockwise_efficient(
             test_info = f", Test Acc={test_acc*100:.2f}%"
 
         # Print progress every display_every rounds
-        if r % display_every == 0:
-            print(f"[PCFedAvg-CE-Blockwise] Round {r:3d}: Global Loss={total_loss:.4f}{test_info}")
+        if display_every and display_every > 0 and (r % display_every == 0):
+            print(f"[PCFedAvg-CE-Blockwise] Round {r+1:3d}: Global Loss={total_loss:.4f}{test_info}")
 
     # === RETURN RESULTS ===
     # Return training history and final model
-    return np.array(losses), np.array(accs), W_blocks, h_hist, g_hist
+    return np.array(losses), np.array(accs), W_blocks, h_hist, g_hist, metric_hist, gradnorm_hist, gmean_hist

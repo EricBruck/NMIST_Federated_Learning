@@ -1,34 +1,39 @@
 
 #main_FedVI.py
 import numpy as np
-from utils import load_mnist, non_iid_split, plot_loss, plot_curve, plot_clients_curves, compute_accuracy
+import matplotlib
+import matplotlib.pyplot as plt
+
+from utils import load_mnist, non_iid_split, plot_curve, plot_clients_curves, compute_accuracy
 from PCFedAvg import pcfedavg_blockwise_efficient, estimate_epsilons
+
 
 # Load data
 X_train, y_train, X_test, y_test = load_mnist()
 
 # Clients
 num_clients = 4
-clients = non_iid_split(X_train, y_train, num_clients, alpha=0.5)
+clients = non_iid_split(X_train, y_train, num_clients, alpha=0.1)
 
 # Initialize per-client blocks (each client has its own model W_i)
 d = X_train.shape[1]
 C = 10
 W_blocks = [np.random.randn(d, C) * 0.01 for _ in range(num_clients)]
 
-R = 60
-K = 2
-gamma_l = 0.005
+R = 40
+K = 5
+gamma_l = 0.01
 rho_base=1.0
-lam=0.5
-gamma_reg=1e-4
+eps_multiplier = 1.5
+lam=1.0
+gamma_reg=5e-4
 batch_size = 128
 client_fraction = 1.0
 
 W_bar0 = sum(W_blocks) / len(W_blocks)
-eps_list = estimate_epsilons(clients, W_init=W_bar0, warmup_epochs=1, lr=0.01, batch_size=64)
+eps_list = estimate_epsilons(clients, W_init=W_bar0, multiplier = eps_multiplier, warmup_epochs=2, lr=0.01, batch_size=64)
 
-losses, accs, final_blocks, h_hist, g_hist = pcfedavg_blockwise_efficient(
+losses, accs, final_blocks, h_hist, g_hist, metric_hist, gradnorm_hist, gmean_hist = pcfedavg_blockwise_efficient(
     client_datasets = clients,
     W_blocks=W_blocks, 
     R=R,
@@ -50,6 +55,17 @@ W_final = sum(final_blocks) / len(final_blocks)
 acc = compute_accuracy(X_test, y_test, W_final)
 print(f"[PCFedAvg-Blockwise] Final Accuracy = {acc*100:.2f}%")
 
+# Average across clients each round (ignore NaNs if any client is empty)
+h_avg = np.nanmean(h_hist, axis=1)   # shape (R,)
+g_avg = np.nanmean(g_hist, axis=1)   # shape (R,)
+
+
+
 plot_curve(losses, "Global loss f over rounds", "Loss")
-plot_clients_curves(h_hist, "Local constraint h_i(x_i) over rounds", "h_i(x_i)", max_clients=10)
-plot_clients_curves(g_hist, "Infeasibility g_{i,λ}(x_i) over rounds", "g_{i,λ}(x_i)", max_clients=10)
+plot_curve(h_avg, "Average constraint value across clients", "avg h_i(x_i)")
+plot_curve(g_avg, "Average infeasibility across clients", "avg g_{i,λ}(x_i)")
+
+
+plot_curve(gradnorm_hist, "|| (1/m) Σ ∇f_i(W_bar) || over rounds", "norm")
+plot_curve(metric_hist, "Gradient Norm Metric: ||avg grad|| + ρ·avg g(h)", "value")
+
