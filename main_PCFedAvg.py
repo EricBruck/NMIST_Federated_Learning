@@ -20,11 +20,11 @@ d = X_train.shape[1]
 C = 10
 W_blocks = [np.random.randn(d, C) * 0.01 for _ in range(num_clients)]
 
-R = 40
+R = 100
 K = 5
 gamma_l = 0.01
 rho_base=1.0
-eps_multiplier = 1.5
+eps_multiplier = 1.25
 lam=1.0
 gamma_reg=5e-4
 batch_size = 128
@@ -54,6 +54,7 @@ losses, accs, final_blocks, h_hist, g_hist, metric_hist, gradnorm_hist, gmean_hi
 W_final = sum(final_blocks) / len(final_blocks)
 acc = compute_accuracy(X_test, y_test, W_final)
 print(f"[PCFedAvg-Blockwise] Final Accuracy = {acc*100:.2f}%")
+print(f"[PCFedAvg-Blockwise] Final Global Loss = {losses[-1]:.4f}")
 
 # Average across clients each round (ignore NaNs if any client is empty)
 h_avg = np.nanmean(h_hist, axis=1)   # shape (R,)
@@ -68,4 +69,4 @@ plot_curve(g_avg, "Average infeasibility across clients", "avg g_{i,λ}(x_i)")
 
 plot_curve(gradnorm_hist, "|| (1/m) Σ ∇f_i(W_bar) || over rounds", "norm")
 plot_curve(metric_hist, "Gradient Norm Metric: ||avg grad|| + ρ·avg g(h)", "value")
-
+plt.show()

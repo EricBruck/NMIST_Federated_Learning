@@ -29,7 +29,7 @@ def main():
     alpha = 0.1
 
     R = 100
-    K = 5
+    K = 4
     batch_size = 128
     client_fraction = 1.0
 
@@ -53,7 +53,7 @@ def main():
     # -------------------------
     pcf_gamma_l = 0.01
     rho_base = 1.0       # base penalty parameter for PCFedAvg
-    eps_multiplier = 1.5  # multiplier for setting epsilons based on initial loss
+    eps_multiplier = 1.25  # multiplier for setting epsilons based on initial loss
     lam = 1.0
     gamma_reg = 5e-4
 
@@ -78,6 +78,8 @@ def main():
     w_pcf = sum(final_blocks_pcf) / len(final_blocks_pcf)
     final_acc_pcf = compute_accuracy(X_test, y_test, w_pcf)
     print(f"[PCFedAvg] Final Test Acc = {final_acc_pcf*100:.2f}%")
+    print(f"[PCFedAvg-Blockwise] Final Global Loss = {losses_pcf[-1]:.4f}")
+
 
     # -------------------------
     # Run FedProx
@@ -100,6 +102,8 @@ def main():
     )
     final_acc_fp = compute_accuracy(X_test, y_test, w_fp)
     print(f"[FedProx] Final Test Acc = {final_acc_fp*100:.2f}%")
+    print(f"[FedProx] Final Global Loss = {losses_fp[-1]:.4f}")
+
 
     # -------------------------
     # Run Ditto
@@ -127,6 +131,8 @@ def main():
     )
     final_acc_dt = compute_accuracy(X_test, y_test, w_dt)
     print(f"[Ditto] Final Global Test Acc = {final_acc_dt*100:.2f}%")
+    print(f"[Ditto] Final Global Loss = {losses_dt[-1]:.4f}")
+
 
     # Personalized mean acc (optional)
     per_acc_mean = np.nanmean(per_acc_rm, axis=1)
