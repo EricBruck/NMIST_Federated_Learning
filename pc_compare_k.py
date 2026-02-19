@@ -62,7 +62,7 @@ def main():
     C = 10
 
     # Keep these FIXED across K
-    R = 50
+    R = 100
     gamma_l = 0.005
     rho_base = 1.0
     eps_multiplier = 1.25
@@ -80,7 +80,7 @@ def main():
     acc_curves = {}
 
     for K in Ks:
-        print(f"\nRun {Ks.index(K)} of PCFedAvg with K={K} local steps per round...")
+        print(f"\nRun {Ks.index(K)+1} of PCFedAvg with K={K} local steps per round...")
         losses, accs, final_acc = run_pcfedavg_for_K(
             clients=clients,
             X_test=X_test, y_test=y_test,
