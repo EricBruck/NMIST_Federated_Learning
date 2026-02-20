@@ -6,6 +6,8 @@ from utils import load_mnist, non_iid_split, compute_accuracy
 from PCFedAvg import pcfedavg_blockwise_efficient, estimate_epsilons
 from fedprox import fedprox_train
 from ditto import ditto_train
+from scaffold import scaffold_train
+
 
 def plot_compare_curves(x, curves, title, ylabel, xlabel="Round"):
     plt.figure()
@@ -30,7 +32,7 @@ def main():
 
     R = 100
     K = 5
-    batch_size = 128
+    batch_size = 64
     client_fraction = 1.0
 
     d = 785  # MNIST flattened 784 + bias
@@ -51,11 +53,11 @@ def main():
     # -------------------------
     # Run PCFedAvg
     # -------------------------
-    pcf_gamma_l = 0.01
+    pcf_gamma_l = 0.01  # local learning rate for PCFedAvg; you can set to 0.01 or 0.05 for faster convergence, but it may be less stable without tuning other params
     rho_base = 1.0       # base penalty parameter for PCFedAvg
-    eps_multiplier = 1.5  # multiplier for setting epsilons based on initial loss
-    lam = 1.0
-    gamma_reg = 5e-4
+    eps_multiplier = 1.25  # multiplier for setting epsilons based on initial loss
+    lam = 0.5
+    gamma_reg = 1e-4
 
     eps_list = estimate_epsilons(clients, W_init=w0, multiplier = eps_multiplier, warmup_epochs=1, lr=0.01, batch_size=64)
 
@@ -78,6 +80,8 @@ def main():
     w_pcf = sum(final_blocks_pcf) / len(final_blocks_pcf)
     final_acc_pcf = compute_accuracy(X_test, y_test, w_pcf)
     print(f"[PCFedAvg] Final Test Acc = {final_acc_pcf*100:.2f}%")
+    print(f"[PCFedAvg-Blockwise] Final Global Loss = {losses_pcf[-1]:.4f}")
+
 
     # -------------------------
     # Run FedProx
@@ -100,6 +104,8 @@ def main():
     )
     final_acc_fp = compute_accuracy(X_test, y_test, w_fp)
     print(f"[FedProx] Final Test Acc = {final_acc_fp*100:.2f}%")
+    print(f"[FedProx] Final Global Loss = {losses_fp[-1]:.4f}")
+
 
     # -------------------------
     # Run Ditto
@@ -127,6 +133,32 @@ def main():
     )
     final_acc_dt = compute_accuracy(X_test, y_test, w_dt)
     print(f"[Ditto] Final Global Test Acc = {final_acc_dt*100:.2f}%")
+    print(f"[Ditto] Final Global Loss = {losses_dt[-1]:.4f}")
+
+
+    # -------------------------
+    # Run SCAFFOLD
+    # -------------------------
+    scaffold_lr = 0.01
+    scaffold_clip = 5.0  # you can set e.g. 5.0 if you see spikes
+
+    losses_sc, accs_sc, w_sc = scaffold_train(
+        client_datasets=clients,
+        w_init=w0.copy(),
+        R=R,
+        K=K,
+        lr=scaffold_lr,
+        batch_size=batch_size,
+        client_fraction=client_fraction,
+        X_test=X_test,
+        y_test=y_test,
+        display_every=0,   # safe AFTER you patch scaffold_train (it already guards)
+        clip=scaffold_clip,
+    )
+    final_acc_sc = compute_accuracy(X_test, y_test, w_sc)
+    print(f"[SCAFFOLD] Final Test Acc = {final_acc_sc*100:.2f}%")
+    print(f"[SCAFFOLD] Final Global Loss = {losses_sc[-1]:.4f}")
+
 
     # Personalized mean acc (optional)
     per_acc_mean = np.nanmean(per_acc_rm, axis=1)
@@ -143,13 +175,19 @@ def main():
         ylabel="Loss",
     )
 
-    if len(accs_pcf) > 0 and len(accs_fp) > 0 and len(accs_dt) > 0:
+    if len(accs_pcf) > 0 and len(accs_fp) > 0 and len(accs_dt) > 0 and len(accs_sc) > 0:
         plot_compare_curves(
             rounds,
-            {"PCFedAvg": accs_pcf, "FedProx": accs_fp, "Ditto(global)": accs_dt, "Ditto(personal mean)": per_acc_mean},
+            {
+                "PCFedAvg": accs_pcf,
+                "FedProx": accs_fp,
+                "Ditto(global)": accs_dt,
+                "SCAFFOLD": accs_sc,
+            },
             title="Test Accuracy vs Round",
             ylabel="Accuracy",
         )
+
 
 if __name__ == "__main__":
     main()
