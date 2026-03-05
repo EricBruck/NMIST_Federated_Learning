@@ -28,9 +28,9 @@ def main():
     np.random.seed(seed)
 
     num_clients = 5
-    alpha = 0.1
+    alpha = 0.5
 
-    R = 100
+    R = 120
     K = 5
     batch_size = 64
     client_fraction = 1.0
@@ -170,7 +170,7 @@ def main():
 
     plot_compare_curves(
         rounds,
-        {"PCFedAvg": losses_pcf, "FedProx": losses_fp, "Ditto(global)": losses_dt},
+        {"PCFedAvg": losses_pcf, "FedProx": losses_fp, "Ditto(global)": losses_dt, "SCAFFOLD": losses_sc},
         title="Global Train Loss vs Round",
         ylabel="Loss",
     )
