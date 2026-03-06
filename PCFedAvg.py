@@ -244,21 +244,20 @@ def estimate_epsilons(client_datasets, W_init, multiplier = 1.1, warmup_epochs=1
 
 def pcfedavg_blockwise_efficient(
     client_datasets,
-    W_blocks,                 
-    R: int,                   
-    K: int,                   
-    epochs: int,              
-    gamma_l: float,           
-    rho_base: float,          
-    lam: float,               
-    gamma_reg: float,         
-    eps_list,                 
+    W_blocks,
+    R: int,                  # Global communication rounds
+    K: int,                  # Local mini-batch update steps per round
+    gamma_l: float,
+    rho_base: float,
+    lam: float,
+    gamma_reg: float,
+    eps_list,
     batch_size: int = 64,
-    client_fraction: float = 1.0,  
+    client_fraction: float = 1.0,
     X_test=None,
     y_test=None,
     display_every: int = 1,
-    clip: float = 5.0,        
+    clip: float = 5.0,
     X_train=None,
     y_train=None,
 ):
@@ -328,29 +327,24 @@ def pcfedavg_blockwise_efficient(
     rho_hist               → Penalty schedule values
     """
 
-    # ==============================================================
-    # 1. INITIALIZATION
-    # ==============================================================
+    m = len(client_datasets)
 
-    m = len(client_datasets)  # number of clients
-
-    # --- Safety checks ---
     if len(W_blocks) != m:
         raise ValueError("W_blocks must have length = num_clients")
+
     if len(eps_list) != m:
         raise ValueError("eps_list must have length = num_clients")
 
-    # --- Dataset weights for global loss computation ---
     n_k = np.array([len(X) for X, _ in client_datasets], dtype=float)
     n_total = np.sum(n_k) if np.sum(n_k) > 0 else 1.0
 
-    # --- History containers ---
     losses, accs = [], []
 
-    h_hist = np.zeros((R, m), dtype=float)          # constraint violations
-    g_hist = np.zeros((R, m), dtype=float)          # penalty values
+    h_hist = np.zeros((R, m))
+    g_hist = np.zeros((R, m))
+
     local_loss_hist = np.full((R, m), np.nan)
-    local_acc_hist  = np.full((R, m), np.nan)
+    local_acc_hist = np.full((R, m), np.nan)
 
     global_train_acc_hist = np.full(R, np.nan)
     avg_obj_hist = np.full(R, np.nan)
@@ -360,8 +354,8 @@ def pcfedavg_blockwise_efficient(
     gradnorm_hist = np.zeros(R)
     gmean_hist = np.zeros(R)
 
-    # --- Initial global loss before training ---
     W_bar_init = sum(W_blocks) / m
+
     init_loss = 0.0
     for i in range(m):
         X_i, y_i = client_datasets[i]
@@ -371,43 +365,25 @@ def pcfedavg_blockwise_efficient(
 
     print(f"[Before training] Global Loss={init_loss:.4f}")
 
-    # ==============================================================
-    # 2. GLOBAL COMMUNICATION ROUNDS
-    # ==============================================================
-
     for r in range(R):
 
-        # ----------------------------------------------------------
-        # 2.1 Penalty Weight Schedule
-        # ----------------------------------------------------------
-        # ρ_r increases slowly over time to gradually enforce
-        # feasibility constraints.
         rho_r = rho_base * (r + 10000) ** 0.25
         rho_hist[r] = rho_r
 
-        # ----------------------------------------------------------
-        # 2.2 Client Sampling
-        # ----------------------------------------------------------
         if client_fraction >= 1.0:
             S_r = np.arange(m)
         else:
             s_size = max(1, int(m * client_fraction))
             S_r = np.random.choice(m, size=s_size, replace=False)
 
-        # Snapshot of model at start of round
         W_snapshot = [W.copy() for W in W_blocks]
 
-        # Precompute total sum of blocks (used to form global proxy)
         sum_all = np.zeros_like(W_snapshot[0])
         for j in range(m):
             sum_all += W_snapshot[j]
 
         updated_block = {}
         D_sum = {}
-
-        # ==========================================================
-        # 3. CLIENT LOCAL COMPUTATION
-        # ==========================================================
 
         for i in S_r:
 
@@ -420,65 +396,56 @@ def pcfedavg_blockwise_efficient(
 
             W_i = W_snapshot[i].copy()
             sum_other = sum_all - W_snapshot[i]
+
             D_acc = np.zeros_like(W_i)
 
-            # ------------------------------------------------------
-            # K Local Rounds (independent from epochs)
-            # ------------------------------------------------------
-            for k_idx in range(K):
+            n = len(X_i)
+            steps_per_epoch = int(np.ceil(n / batch_size))
 
-                # --------------------------------------------------
-                # epochs full passes per local round
-                # --------------------------------------------------
-                for e_idx in range(epochs):
+            X_i, y_i = shuffle(X_i, y_i)
 
+            for step in range(K):
+
+                batch_idx = step % steps_per_epoch
+
+                start = batch_idx * batch_size
+                end = start + batch_size
+
+                if batch_idx == 0 and step > 0:
                     X_i, y_i = shuffle(X_i, y_i)
-                    n = len(X_i)
 
-                    for s in range(0, n, batch_size):
+                Xb = X_i[start:end]
+                yb = y_i[start:end]
 
-                        Xb = X_i[s:s+batch_size]
-                        yb = y_i[s:s+batch_size]
-                        if len(Xb) == 0:
-                            continue
+                if len(Xb) == 0:
+                    continue
 
-                        # Global model proxy
-                        z = (sum_other + W_i) / m
+                z = (sum_other + W_i) / m
 
-                        # Data gradient
-                        grad_z = compute_gradient(Xb, yb, z)
-                        d_block = grad_z / m
+                grad_z = compute_gradient(Xb, yb, z)
+                d_block = grad_z / m
 
-                        # Constraint penalty gradient
-                        pen = grad_g_i(
-                            W_i,
-                            Xb,
-                            yb,
-                            gamma_reg=gamma_reg,
-                            eps_i=eps_list[i],
-                            lam=lam
-                        )
+                pen = grad_g_i(
+                    W_i,
+                    Xb,
+                    yb,
+                    gamma_reg=gamma_reg,
+                    eps_i=eps_list[i],
+                    lam=lam
+                )
 
-                        # Combined update direction
-                        v_i = d_block + rho_r * pen
+                v_i = d_block + rho_r * pen
 
-                        # Gradient clipping
-                        v_norm = np.linalg.norm(v_i)
-                        if v_norm > clip:
-                            v_i *= clip / (v_norm + 1e-12)
+                v_norm = np.linalg.norm(v_i)
+                if v_norm > clip:
+                    v_i *= clip / (v_norm + 1e-12)
 
-                        # Local update
-                        W_i -= gamma_l * v_i
+                W_i -= gamma_l * v_i
 
-                        # Accumulate gradient summary
-                        D_acc += d_block
+                D_acc += d_block
 
             updated_block[i] = W_i
             D_sum[i] = D_acc
-
-        # ==========================================================
-        # 4. SERVER AGGREGATION (Communication-Efficient Rule)
-        # ==========================================================
 
         new_blocks = [W_snapshot[j].copy() for j in range(m)]
 
@@ -490,6 +457,7 @@ def pcfedavg_blockwise_efficient(
 
             x_snap_j = W_snapshot[j]
             x_owner = updated_block[j] if j in updated_block else x_snap_j
+
             sum_D_excl_j = total_D - (D_sum[j] if j in D_sum else 0.0)
 
             new_blocks[j] = (
@@ -500,40 +468,41 @@ def pcfedavg_blockwise_efficient(
 
         W_blocks = new_blocks
 
-        # ==========================================================
-        # 5. ROUND-END EVALUATION
-        # ==========================================================
-
-        # --- Local block metrics ---
         for i in range(m):
+
             X_i, y_i = client_datasets[i]
+
             if len(X_i) == 0:
                 continue
 
             local_loss_hist[r, i] = cross_entropy_loss(X_i, y_i, W_blocks[i])
             local_acc_hist[r, i] = compute_accuracy(X_i, y_i, W_blocks[i])
 
-        # --- Constraint diagnostics ---
         for i in range(m):
+
             X_i, y_i = client_datasets[i]
+
             if len(X_i) == 0:
                 continue
 
-            h = h_i_loss(W_blocks[i], X_i, y_i,
-                         gamma_reg=gamma_reg,
-                         eps_i=eps_list[i])
+            h = h_i_loss(
+                W_blocks[i],
+                X_i,
+                y_i,
+                gamma_reg=gamma_reg,
+                eps_i=eps_list[i]
+            )
 
             h_hist[r, i] = h
             g_hist[r, i] = g_value(h, lam=lam)
 
-        # --- Global model ---
         W_bar = sum(W_blocks) / m
 
         if X_train is not None and y_train is not None:
             global_train_acc_hist[r] = compute_accuracy(X_train, y_train, W_bar)
 
-        # --- Gradient diagnostics ---
         grad_sum = np.zeros_like(W_bar)
+
         for i in range(m):
             X_i, y_i = client_datasets[i]
             if len(X_i) == 0:
@@ -549,8 +518,8 @@ def pcfedavg_blockwise_efficient(
         gmean_hist[r] = g_mean
         metric_hist[r] = avg_grad_norm + rho_r * g_mean
 
-        # --- Penalized objective tracking ---
         obj_vals = []
+
         for i in range(m):
             if not np.isnan(local_loss_hist[r, i]):
                 obj_vals.append(
@@ -559,34 +528,37 @@ def pcfedavg_blockwise_efficient(
 
         avg_obj_hist[r] = np.mean(obj_vals) if obj_vals else np.nan
 
-        # --- Global weighted loss ---
         total_loss = 0.0
+
         for i in range(m):
+
             X_i, y_i = client_datasets[i]
+
             if len(X_i) == 0:
                 continue
+
             total_loss += (
                 n_k[i] / n_total
             ) * cross_entropy_loss(X_i, y_i, W_bar)
 
         losses.append(total_loss)
 
-        # --- Test accuracy ---
         test_info = ""
+
         if X_test is not None and y_test is not None:
+
             test_acc = compute_accuracy(X_test, y_test, W_bar)
+
             accs.append(test_acc)
+
             test_info = f", Test Acc={test_acc*100:.2f}%"
 
         if display_every and (r % display_every == 0):
+
             print(
                 f"[PCFedAvg-CE-Blockwise] "
                 f"Round {r+1:3d}: Global Loss={total_loss:.4f}{test_info}"
             )
-
-    # ==============================================================
-    # 6. RETURN ALL TRACKED METRICS
-    # ==============================================================
 
     return (
         np.array(losses),

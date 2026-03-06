@@ -117,7 +117,7 @@ def initial_metrics_for_run(
 
 def run_pcfedavg_for_K(
     clients, X_train, y_train, X_test, y_test, d, C,
-    R, K, epochs, gamma_l, rho_base, lam, gamma_reg, batch_size, client_fraction,
+    R, K, gamma_l, rho_base, lam, gamma_reg, batch_size, client_fraction,
     eps_mult=1.25, init_scale=0.01, seed=42,
     display_every=0,
 ):
@@ -173,7 +173,6 @@ def run_pcfedavg_for_K(
         W_blocks=W_blocks0,
         R=R,
         K=K,
-        epochs=epochs,
         gamma_l=gamma_l,
         rho_base=rho_base,
         lam=lam,
@@ -228,7 +227,7 @@ def run_pcfedavg_for_K(
 def run_pcfedavg_multiple_seeds(
     seeds,
     clients, X_train, y_train, X_test, y_test, d, C,
-    R, K, epochs, gamma_l, rho_base, lam, gamma_reg, batch_size, client_fraction,
+    R, K, gamma_l, rho_base, lam, gamma_reg, batch_size, client_fraction,
     eps_mult=1.25, init_scale=0.01,
 ):
     """
@@ -242,7 +241,7 @@ def run_pcfedavg_multiple_seeds(
             X_train=X_train, y_train=y_train,
             X_test=X_test, y_test=y_test,
             d=d, C=C,
-            R=R, K=K, epochs=epochs,
+            R=R, K=K,
             gamma_l=gamma_l,
             rho_base=rho_base,
             lam=lam,
@@ -297,8 +296,7 @@ def main():
 
     # fixed across K
     R = 120
-    epochs = 1
-    gamma_l = 0.005
+    gamma_l = 0.01
     rho_base = 1.0
     eps_multiplier = 1.25
     lam = 0.5
@@ -306,7 +304,7 @@ def main():
     batch_size = 64
     client_fraction = 1.0
 
-    Ks = [1, 5, 10]
+    Ks = [50, 200, 500, 1000]
 
     # global comparison curves
     loss_curves = {}
@@ -321,8 +319,8 @@ def main():
     local_loss_by_K = {}   # K -> (T, m) with T=R+1
 
     for K in Ks:
-        if K >= 8:
-            seeds_for_k10 = [10, 11, 12]  # increase for smoother
+        if K >= 50:
+            seeds_for_k = [10, 11, 12, 13]  # increase for smoother
 
             (
                 mean_1d, std_1d,
@@ -331,12 +329,12 @@ def main():
                 g_mean, g_std,
                 mean_final_acc, std_final_acc
             ) = run_pcfedavg_multiple_seeds(
-                seeds=seeds_for_k10,
+                seeds=seeds_for_k,
                 clients=clients,
                 X_train=X_train, y_train=y_train,
                 X_test=X_test, y_test=y_test,
                 d=d, C=C,
-                R=R, K=K, epochs=epochs,
+                R=R, K=K,
                 gamma_l=gamma_l,
                 rho_base=rho_base,
                 lam=lam,
@@ -347,7 +345,7 @@ def main():
                 init_scale=0.01,
             )
 
-            tag = f"K={K} (mean of {len(seeds_for_k10)})"
+            tag = f"K={K} (mean of {len(seeds_for_k)})"
 
             loss_curves[tag] = mean_1d["losses"]
             test_acc_curves[tag] = mean_1d["accs"]
@@ -378,7 +376,7 @@ def main():
                 X_train=X_train, y_train=y_train,
                 X_test=X_test, y_test=y_test,
                 d=d, C=C,
-                R=R, K=K, epochs=epochs,
+                R=R, K=K, 
                 gamma_l=gamma_l,
                 rho_base=rho_base,
                 lam=lam,

@@ -32,39 +32,40 @@ def _sgd_prox_update(
     ref: np.ndarray,
     lr: float,
     prox_coeff: float,
-    local_epochs: int,
+    local_steps: int, 
     batch_size: int,
     clip: float = 0.0,
 ):
     """
     SGD on:  F(w) + (prox_coeff/2)||w - ref||^2
     gradient = ∇F(w) + prox_coeff*(w - ref)
+
+    local_steps = number of mini-batch updates
     """
+
     w = w_init.copy()
     n = len(X)
 
     if n == 0:
         return w
 
-    for _ in range(local_epochs):
-        X, y = shuffle(X, y)
-        for s in range(0, n, batch_size):
-            Xb = X[s:s+batch_size]
-            yb = y[s:s+batch_size]
-            if len(Xb) == 0:
-                continue
+    for step in range(local_steps):
 
-            grad = compute_gradient(Xb, yb, w) + prox_coeff * (w - ref)
+        # sample minibatch
+        idx = np.random.choice(n, batch_size, replace=n < batch_size)
+        Xb = X[idx]
+        yb = y[idx]
 
-            if clip and clip > 0:
-                gnorm = np.linalg.norm(grad)
-                if gnorm > clip:
-                    grad = grad * (clip / (gnorm + 1e-12))
+        grad = compute_gradient(Xb, yb, w) + prox_coeff * (w - ref)
 
-            w -= lr * grad
+        if clip and clip > 0:
+            gnorm = np.linalg.norm(grad)
+            if gnorm > clip:
+                grad = grad * (clip / (gnorm + 1e-12))
+
+        w -= lr * grad
 
     return w
-
 
 # ============================================================
 # DITTO TRAINING LOOP
@@ -74,12 +75,11 @@ def ditto_train(
     client_datasets,
     w_init: np.ndarray,
     R: int,
-    local_epochs_global: int,
-    local_epochs_personal: int,
+    K: int,                     # local updates per round
     lr_global: float,
     lr_personal: float,
-    mu: float,      # proximal weight for global subproblem
-    lam: float,     # coupling weight for personalization
+    mu: float,
+    lam: float,
     batch_size: int = 64,
     client_fraction: float = 1.0,
     X_test=None,
@@ -88,13 +88,15 @@ def ditto_train(
     clip: float = 0.0,
 ):
     """
+    Ditto with K local mini-batch updates per round.
+
     Returns:
       global_losses
       global_accs
       w_global
       v_list
-      personal_losses_rm  (R, m)
-      personal_accs_rm    (R, m)
+      personal_losses_rm
+      personal_accs_rm
     """
 
     m = len(client_datasets)
@@ -103,6 +105,7 @@ def ditto_train(
     n_total = np.sum(n_k) if np.sum(n_k) > 0 else 1.0
 
     w_global = w_init.copy()
+
     v_list = [w_init.copy() for _ in range(m)]
 
     global_losses = []
@@ -111,13 +114,9 @@ def ditto_train(
     personal_losses_rm = np.full((R, m), np.nan)
     personal_accs_rm = np.full((R, m), np.nan)
 
-    # ============================================================
-    # ROUNDS
-    # ============================================================
-
     for r in range(R):
 
-        # ---- Client sampling ----
+        # client sampling
         if client_fraction >= 1.0:
             S_r = np.arange(m)
         else:
@@ -126,31 +125,41 @@ def ditto_train(
 
         w_snapshot = w_global.copy()
 
-        # ============================================================
-        # (1) GLOBAL UPDATE
-        # ============================================================
-
         avg_delta = np.zeros_like(w_global)
         denom = 0.0
 
+        # -----------------------------
+        # GLOBAL STEP
+        # -----------------------------
         for i in S_r:
+
             X_i, y_i = client_datasets[i]
+            n = len(X_i)
 
-            w_i = _sgd_prox_update(
-                w_init=w_snapshot,
-                X=X_i,
-                y=y_i,
-                ref=w_snapshot,
-                lr=lr_global,
-                prox_coeff=mu,
-                local_epochs=local_epochs_global,
-                batch_size=batch_size,
-                clip=clip,
-            )
+            if n == 0:
+                continue
 
-            delta_i = w_i - w_snapshot
+            w_local = w_snapshot.copy()
+
+            for step in range(K):
+
+                idx = np.random.choice(n, size=min(batch_size, n), replace=False)
+                Xb = X_i[idx]
+                yb = y_i[idx]
+
+                grad = compute_gradient(Xb, yb, w_local) + mu * (w_local - w_snapshot)
+
+                if clip and clip > 0:
+                    gnorm = np.linalg.norm(grad)
+                    if gnorm > clip:
+                        grad = grad * (clip / (gnorm + 1e-12))
+
+                w_local -= lr_global * grad
+
+            delta_i = w_local - w_snapshot
 
             weight = n_k[i]
+
             avg_delta += weight * delta_i
             denom += weight
 
@@ -158,49 +167,66 @@ def ditto_train(
             avg_delta /= denom
             w_global = w_snapshot + avg_delta
 
-        # ============================================================
-        # (2) PERSONALIZED UPDATE
-        # ============================================================
-
+        # -----------------------------
+        # PERSONALIZED STEP
+        # -----------------------------
         for i in S_r:
+
             X_i, y_i = client_datasets[i]
+            n = len(X_i)
 
-            v_list[i] = _sgd_prox_update(
-                w_init=v_list[i],
-                X=X_i,
-                y=y_i,
-                ref=w_snapshot,
-                lr=lr_personal,
-                prox_coeff=lam,
-                local_epochs=local_epochs_personal,
-                batch_size=batch_size,
-                clip=clip,
-            )
+            if n == 0:
+                continue
 
-        # ============================================================
-        # EVALUATION
-        # ============================================================
+            v_local = v_list[i]
 
-        # ---- Global train loss ----
+            for step in range(K):
+
+                idx = np.random.choice(n, size=min(batch_size, n), replace=False)
+                Xb = X_i[idx]
+                yb = y_i[idx]
+
+                grad = compute_gradient(Xb, yb, v_local) + lam * (v_local - w_snapshot)
+
+                if clip and clip > 0:
+                    gnorm = np.linalg.norm(grad)
+                    if gnorm > clip:
+                        grad = grad * (clip / (gnorm + 1e-12))
+
+                v_local -= lr_personal * grad
+
+            v_list[i] = v_local
+
+        # -----------------------------
+        # GLOBAL TRAIN LOSS
+        # -----------------------------
         total_loss = 0.0
+
         for i in range(m):
+
             X_i, y_i = client_datasets[i]
+
             if len(X_i) == 0:
                 continue
+
             total_loss += (n_k[i] / n_total) * cross_entropy_loss(X_i, y_i, w_global)
 
         global_losses.append(total_loss)
 
-        # ---- Global test accuracy ----
         test_info = ""
+
         if X_test is not None and y_test is not None:
+
             acc = compute_accuracy(X_test, y_test, w_global)
             global_accs.append(acc)
+
             test_info = f", Test Acc={acc*100:.2f}%"
 
-        # ---- Personalized metrics ----
+        # personalized metrics
         for i in range(m):
+
             X_i, y_i = client_datasets[i]
+
             if len(X_i) == 0:
                 continue
 
