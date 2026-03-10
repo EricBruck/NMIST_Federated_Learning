@@ -30,8 +30,8 @@ def main():
     num_clients = 5
     alpha = 0.1
 
-    R = 100
-    K = 5
+    R = 120
+    K = 500
     batch_size = 64
     client_fraction = 1.0
 
@@ -61,7 +61,7 @@ def main():
 
     eps_list = estimate_epsilons(clients, W_init=w0, multiplier = eps_multiplier, warmup_epochs=1, lr=0.01, batch_size=64)
 
-    losses_pcf, accs_pcf, final_blocks_pcf, h_hist, g_hist, metric_hist, gradnorm_hist, gmean_hist = pcfedavg_blockwise_efficient(
+    losses_pcf, accs_pcf, final_blocks_pcf, h_hist, g_hist, metric_hist, gradnorm_hist, gmean_hist, local_loss_hist, local_acc_hist, global_train_acc_hist, avg_obj_hist, rho_hist = pcfedavg_blockwise_efficient(
         client_datasets=clients,
         W_blocks=[W.copy() for W in W_blocks0],
         R=R,
@@ -76,6 +76,8 @@ def main():
         X_test=X_test,
         y_test=y_test,
         display_every=1,
+        X_train=None,
+        y_train=None,
     )
     w_pcf = sum(final_blocks_pcf) / len(final_blocks_pcf)
     final_acc_pcf = compute_accuracy(X_test, y_test, w_pcf)
@@ -93,7 +95,7 @@ def main():
         client_datasets=clients,
         w_init=w0.copy(),
         R=R,
-        local_epochs=K,
+        K=K,
         lr=fedprox_lr,
         mu=fedprox_mu,
         batch_size=batch_size,
@@ -119,8 +121,7 @@ def main():
         client_datasets=clients,
         w_init=w0.copy(),
         R=R,
-        local_epochs_global=K,
-        local_epochs_personal=K,
+        K=K,
         lr_global=ditto_lr_global,
         lr_personal=ditto_lr_personal,
         mu=ditto_mu,
@@ -170,7 +171,7 @@ def main():
 
     plot_compare_curves(
         rounds,
-        {"PCFedAvg": losses_pcf, "FedProx": losses_fp, "Ditto(global)": losses_dt},
+        {"PCFedAvg": losses_pcf, "FedProx": losses_fp, "Ditto(global)": losses_dt, "SCAFFOLD": losses_sc},
         title="Global Train Loss vs Round",
         ylabel="Loss",
     )

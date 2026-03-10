@@ -30,7 +30,7 @@ def scaffold_train(
     client_datasets,
     w_init: np.ndarray,
     R: int,
-    K: int,                 # local epochs/steps (matches your "K")
+    K: int,                 # number of local mini-batch updates
     lr: float,
     batch_size: int = 64,
     client_fraction: float = 1.0,
@@ -52,13 +52,14 @@ def scaffold_train(
 
     # Global model and controls
     w_global = w_init.copy()
-    c = np.zeros_like(w_global)                # global control variate
-    c_list = [np.zeros_like(w_global) for _ in range(m)]  # per-client controls
+    c = np.zeros_like(w_global)                       # global control
+    c_list = [np.zeros_like(w_global) for _ in range(m)]  # client controls
 
     losses, accs = [], []
 
     for r in range(R):
-        # sample clients
+
+        # ---- Client sampling ----
         if client_fraction >= 1.0:
             S_r = np.arange(m)
         else:
@@ -67,29 +68,43 @@ def scaffold_train(
 
         w_snapshot = w_global.copy()
 
-        # store local results
         local_ws = []
         local_weights = []
+
         delta_c_sum = np.zeros_like(c)
         denom_selected = 0.0
 
+        # ============================================================
+        # CLIENT LOOP
+        # ============================================================
+
         for i in S_r:
+
             X_i, y_i = client_datasets[i]
+
             if len(X_i) == 0:
                 continue
 
             w_local = w_snapshot.copy()
             c_i_old = c_list[i].copy()
 
-            # Count actual local gradient steps used (important if last batch smaller)
             step_count = 0
 
-            for _ in range(K):
-                X_i, y_i = shuffle(X_i, y_i)
-                n = len(X_i)
-                for sidx in range(0, n, batch_size):
+            # ---- exactly K mini-batch updates ----
+            while step_count < K:
+
+                perm = np.random.permutation(len(X_i))
+                X_i = X_i[perm]
+                y_i = y_i[perm]
+
+                for sidx in range(0, len(X_i), batch_size):
+
+                    if step_count >= K:
+                        break
+
                     Xb = X_i[sidx:sidx + batch_size]
                     yb = y_i[sidx:sidx + batch_size]
+
                     if len(Xb) == 0:
                         continue
 
@@ -104,44 +119,51 @@ def scaffold_train(
                             grad_corr = grad_corr * (clip / (gnorm + 1e-12))
 
                     w_local -= lr * grad_corr
+
                     step_count += 1
 
-            # Guard against division by zero (shouldn't happen unless client empty)
             if step_count == 0:
                 continue
 
-            # Client control update (classic SCAFFOLD formula)
-            # c_i_new = c_i_old - c + (1/(lr*T))*(w_snapshot - w_local)
+            # ---- client control update ----
             c_i_new = c_i_old - c + (1.0 / (lr * step_count)) * (w_snapshot - w_local)
             c_list[i] = c_i_new
 
-            # Track changes in c_i to update global c
             delta_c_sum += (c_i_new - c_i_old)
             denom_selected += 1.0
 
-            # Save local model for server aggregation
             local_ws.append(w_local)
             local_weights.append(n_k[i])
 
-        # Server aggregate global model (weighted)
+        # ============================================================
+        # SERVER AGGREGATION
+        # ============================================================
+
         if len(local_ws) > 0:
+
             denom = float(np.sum(local_weights)) if np.sum(local_weights) > 0 else 1.0
             w_new = np.zeros_like(w_global)
+
             for w_i, wk in zip(local_ws, local_weights):
                 w_new += (wk / denom) * w_i
+
             w_global = w_new
 
-        # Update global control c (average delta over selected clients)
+        # ---- update global control ----
         if denom_selected > 0:
             c = c + (1.0 / denom_selected) * delta_c_sum
 
-        # Evaluate global train loss
+        # ============================================================
+        # EVALUATION
+        # ============================================================
+
         total_loss = 0.0
         for i in range(m):
             X_i, y_i = client_datasets[i]
             if len(X_i) == 0:
                 continue
             total_loss += (n_k[i] / n_total) * cross_entropy_loss(X_i, y_i, w_global)
+
         losses.append(total_loss)
 
         test_info = ""
