@@ -288,7 +288,7 @@ def main():
     X_train, y_train, X_test, y_test = load_mnist()
 
     num_clients = 5
-    alpha = 0.5
+    alpha = 0.1
     clients = non_iid_split(X_train, y_train, num_clients, alpha=alpha)
 
     d = X_train.shape[1]
@@ -304,7 +304,7 @@ def main():
     batch_size = 64
     client_fraction = 1.0
 
-    Ks = [50, 200, 500, 1000]
+    Ks = [1, 50, 200, 500]
 
     # global comparison curves
     loss_curves = {}
@@ -320,7 +320,7 @@ def main():
 
     for K in Ks:
         if K >= 50:
-            seeds_for_k = [10, 11, 12, 13]  # increase for smoother
+            seeds_for_k = [10, 11]  # increase for smoother
 
             (
                 mean_1d, std_1d,
@@ -345,7 +345,7 @@ def main():
                 init_scale=0.01,
             )
 
-            tag = f"K={K} (mean of {len(seeds_for_k)})"
+            tag = f"K={K}"
 
             loss_curves[tag] = mean_1d["losses"]
             test_acc_curves[tag] = mean_1d["accs"]
@@ -410,32 +410,32 @@ def main():
     # --------------------------
     plot_compare_curves(
         loss_curves,
-        title="PCFedAvg: Global Train Loss vs Round",
-        ylabel="Loss",
+        title=r"Global Training Loss vs Round",
+        ylabel=r"Loss: $\mathcal{L}(w)$",
         xlabel="Round",
         show_legend=True,
     )
 
     plot_compare_curves(
         test_acc_curves,
-        title="PCFedAvg: Global Test Accuracy vs Round",
-        ylabel="Accuracy",
+        title=r"Global Test Accuracy vs Round",
+        ylabel=r"Accuracy: $\mathrm{Accuracy}$",
         xlabel="Round",
         show_legend=True,
     )
 
     plot_compare_curves(
         infeas_curves,
-        title="PCFedAvg: Avg Infeasibility g (mean over clients) vs Round",
-        ylabel="avg g_{i,λ}(x_i)",
+        title=r"Average Infeasibility vs Round",
+        ylabel=r"Infeasibility: $\frac{1}{m}\sum_{i=1}^{m} g_{i,\lambda}(x_i)$",
         xlabel="Round",
         show_legend=True,
     )
 
     plot_compare_curves(
         avg_obj_curves,
-        title="PCFedAvg: Avg Objective mean_i[f_i(x_i)+ρg_i] vs Round",
-        ylabel="avg objective",
+        title=r"Function Value vs Round",
+        ylabel=r"Function Value: $\frac{1}{m}\sum_{i=1}^{m}\left[f_i(x_i)+\rho g_i(x_i)\right]$",
         xlabel="Round",
         show_legend=True,
     )
@@ -448,8 +448,8 @@ def main():
         curves = {f"client {i}": M[:, i] for i in range(M.shape[1])}
         plot_compare_curves(
             curves,
-            title=f"PCFedAvg: Local Client Losses f_i(x_i) vs Round (K={K})",
-            ylabel="local loss",
+            title=rf"Local Client Losses vs Round ($K={K}$)",
+            ylabel=r"Local Loss: $f_i(x_i)$",
             xlabel="Round",
             show_legend=True,
         )

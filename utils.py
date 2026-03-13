@@ -160,15 +160,21 @@ def plot_clients_curves(values_rm, title, ylabel, xlabel="Round", max_clients=10
     return fig
 
 def plot_compare_curves(curves, title, ylabel, xlabel="Round", show_legend=True):
-    fig, ax = plt.subplots()
-    for name, vals in curves.items():
-        ax.plot(vals, label=name)
+    fig, ax = plt.subplots(figsize=(10, 7))
 
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel(ylabel)
-    ax.set_title(title)
+    for name, vals in curves.items():
+        ax.plot(vals, label=name, linewidth=2.5)
+
+    ax.set_xlabel(xlabel, fontsize=24)
+    ax.set_ylabel(ylabel, fontsize=24)
+    ax.set_title(title, fontsize=24)
+
+    ax.tick_params(axis='both', labelsize=20)
+
     ax.grid(True)
 
     if show_legend:
-        ax.legend(loc="best", fontsize="small", frameon=True)
+        ax.legend(loc="best", fontsize=18, frameon=True)
+
+    fig.tight_layout()
     return fig

@@ -9,15 +9,29 @@ from ditto import ditto_train
 from scaffold import scaffold_train
 
 
+plt.rcParams.update({
+    "font.size": 24,
+    "axes.titlesize": 24,
+    "axes.labelsize": 24,
+    "legend.fontsize": 20,
+    "xtick.labelsize": 20,
+    "ytick.labelsize": 20,
+    "text.usetex": False  # keep False unless LaTeX installed
+})
+
 def plot_compare_curves(x, curves, title, ylabel, xlabel="Round"):
-    plt.figure()
+    fig, ax = plt.subplots()
+
     for name, y in curves.items():
-        plt.plot(x, y, label=name)
-    plt.xlabel(xlabel)
-    plt.ylabel(ylabel)
-    plt.title(title)
-    plt.grid(True)
-    plt.legend(loc="best", fontsize="small", frameon=True)
+        ax.plot(x, y, label=name)
+
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+
+    ax.grid(True)
+    ax.legend(loc="best", frameon=True)
+
     plt.show()
 
 def main():
@@ -171,10 +185,21 @@ def main():
 
     plot_compare_curves(
         rounds,
-        {"PCFedAvg": losses_pcf, "FedProx": losses_fp, "Ditto(global)": losses_dt, "SCAFFOLD": losses_sc},
-        title="Global Train Loss vs Round",
+        {"PCFedAvg": losses_pcf, "FedProx": losses_fp, "Ditto": losses_dt, "SCAFFOLD": losses_sc},
+        title="Algorithm Comparison: Global Training Loss vs Round",
         ylabel="Loss",
     )
+    plot_compare_curves(
+        rounds,
+        {
+            "PCFedAvg": losses_pcf,
+            "FedProx": losses_fp,
+            "Ditto(global)": losses_dt,
+            "SCAFFOLD": losses_sc
+        },
+        title=r"Algorithm Comparison: Global Training Loss vs Round",
+        ylabel=r"Loss $f(x)$",
+)
 
     if len(accs_pcf) > 0 and len(accs_fp) > 0 and len(accs_dt) > 0 and len(accs_sc) > 0:
         plot_compare_curves(
@@ -182,12 +207,12 @@ def main():
             {
                 "PCFedAvg": accs_pcf,
                 "FedProx": accs_fp,
-                "Ditto(global)": accs_dt,
+                "Ditto": accs_dt,
                 "SCAFFOLD": accs_sc,
             },
-            title="Test Accuracy vs Round",
-            ylabel="Accuracy",
-        )
+            title=r"Algorithm Comparison: Global Test Accuracy vs Round",
+            ylabel=r"Accuracy",
+)
 
 
 if __name__ == "__main__":
