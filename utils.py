@@ -9,7 +9,6 @@ Utility functions for:
 """
 
 import numpy as np
-import matplotlib.pyplot as plt
 from sklearn.utils import shuffle
 import torch
 from torchvision import datasets, transforms
@@ -128,10 +127,28 @@ def non_iid_split(X, y, num_clients, alpha=0.5):
 
 
 # ============================================================
-# VISUALIZATION
+# VISUALIZATION (POSTER READY)
 # ============================================================
 
-import matplotlib.pyplot as plt
+def setup_poster_style():
+    """
+    Configures matplotlib global parameters for large, uniform poster plots.
+    Call this once at the beginning of your main scripts.
+    """
+    plt.rcParams.update({
+        "font.size": 30,              # Base text size
+        "axes.titlesize": 40,         # Title size (stands out more)
+        "axes.labelsize": 35,         # Axis label size
+        "legend.fontsize": 24,        # Legend text size
+        "xtick.labelsize": 30,        # X-axis tick numbers
+        "ytick.labelsize": 30,        # Y-axis tick numbers
+        "lines.linewidth": 3.5,       # Thicker lines for visibility from a distance
+        "figure.figsize": (10, 7),    # Uniform aspect ratio and size
+        "figure.autolayout": True,    # Prevents labels from getting cut off
+        "axes.grid": True,            # Standardize grid overlay
+        "grid.alpha": 0.6,            # Slightly softer grid lines
+        "text.usetex": False          # Keep False unless LaTeX is installed on your machine
+    })
 
 def plot_curve(values, title, ylabel, xlabel="Round"):
     fig, ax = plt.subplots()
@@ -139,8 +156,7 @@ def plot_curve(values, title, ylabel, xlabel="Round"):
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     ax.set_title(title)
-    ax.grid(True)
-    return fig  # optional, but useful
+    return fig
 
 def plot_clients_curves(values_rm, title, ylabel, xlabel="Round", max_clients=10, show_legend=True):
     values_rm = np.asarray(values_rm)
@@ -153,28 +169,26 @@ def plot_clients_curves(values_rm, title, ylabel, xlabel="Round", max_clients=10
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     ax.set_title(title)
-    ax.grid(True)
 
     if show_legend and m <= max_clients:
-        ax.legend(loc="best", fontsize="small", frameon=True, ncol=2 if m > 5 else 1)
+        ax.legend(loc="best", frameon=True, ncol=2 if m > 5 else 1)
     return fig
 
 def plot_compare_curves(curves, title, ylabel, xlabel="Round", show_legend=True):
-    fig, ax = plt.subplots(figsize=(10, 7))
+    # Notice we removed figsize and hardcoded fontsizes here.
+    # It will now inherit from setup_poster_style() automatically.
+    fig, ax = plt.subplots()
 
     for name, vals in curves.items():
-        ax.plot(vals, label=name, linewidth=2.5)
+        # X-axis is generated dynamically based on length of vals so it scales correctly
+        x_vals = np.arange(1, len(vals) + 1)
+        ax.plot(x_vals, vals, label=name)
 
-    ax.set_xlabel(xlabel, fontsize=24)
-    ax.set_ylabel(ylabel, fontsize=24)
-    ax.set_title(title, fontsize=24)
-
-    ax.tick_params(axis='both', labelsize=20)
-
-    ax.grid(True)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
 
     if show_legend:
-        ax.legend(loc="best", fontsize=18, frameon=True)
+        ax.legend(loc="best", frameon=True)
 
-    fig.tight_layout()
     return fig

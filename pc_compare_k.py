@@ -1,7 +1,8 @@
 import numpy as np
+import matplotlib.pyplot as plt
 
 from utils import (
-    load_mnist, non_iid_split, plot_compare_curves,
+    load_mnist, non_iid_split, plot_compare_curves, setup_poster_style,
     cross_entropy_loss, compute_accuracy, compute_gradient
 )
 from PCFedAvg import (
@@ -282,6 +283,11 @@ def run_pcfedavg_multiple_seeds(
 # ----------------------------
 
 def main():
+    # -------------------------
+    # Apply poster styling globally
+    # -------------------------
+    setup_poster_style()
+
     seed = 42
     np.random.seed(seed)
 
@@ -441,7 +447,7 @@ def main():
     )
 
     # --------------------------
-    # NEW: Local client loss plots (NOT mean) — separate plot per K
+    # Local client loss plots (NOT mean) — separate plot per K
     # --------------------------
     for K in Ks:
         M = local_loss_by_K[K]  # (R+1, m)
@@ -455,7 +461,6 @@ def main():
         )
 
     # keep windows open
-    import matplotlib.pyplot as plt
     plt.show()
 
 

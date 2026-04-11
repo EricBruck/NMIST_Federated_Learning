@@ -1,5 +1,5 @@
 from utils import load_mnist, create_IID_clients, plot_loss, compute_accuracy
-from fedavg import federated_averaging
+from FedAvg import federated_averaging
 import numpy as np
 
 # Load data
